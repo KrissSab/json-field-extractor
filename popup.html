@@ -35,6 +35,8 @@
 
     body {
       width: 420px;
+      min-width: 420px;
+      max-width: 420px;
       min-height: 200px;
       max-height: 600px;
       background: var(--bg);
@@ -44,6 +46,18 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
+    }
+
+    /* Taller window once a search has run */
+    body.searched { min-height: 520px; }
+
+    /* Pinned side panel fills its docked panel (width is controlled by Chrome) */
+    body.panel {
+      width: 100%;
+      min-width: 0;
+      max-width: none;
+      height: 100vh;
+      max-height: none;
     }
 
     /* Header */
@@ -93,11 +107,39 @@
       border-radius: 20px;
     }
 
+    .icon-btn {
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      line-height: 1;
+      background: var(--surface-2);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      flex-shrink: 0;
+    }
+
+    .icon-btn:hover {
+      background: var(--border);
+      color: var(--text);
+    }
+
+    .icon-btn.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
     /* Main content */
     .main {
       padding: 14px 16px;
       flex: 1;
       overflow-y: auto;
+      overflow-x: hidden;
       display: flex;
       flex-direction: column;
       gap: 12px;
@@ -146,6 +188,61 @@
       color: var(--text-muted);
       font-family: var(--font-ui);
     }
+
+    /* Autocomplete dropdown */
+    .autocomplete {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      z-index: 20;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      max-height: 220px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    }
+
+    .autocomplete.visible { display: block; }
+
+    .autocomplete-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--text-dim);
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .autocomplete-item:last-child { border-bottom: none; }
+
+    .autocomplete-item:hover,
+    .autocomplete-item.active {
+      background: var(--surface-2);
+      color: var(--text);
+    }
+
+    .autocomplete-item span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .ac-match {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .autocomplete::-webkit-scrollbar { width: 4px; }
+    .autocomplete::-webkit-scrollbar-track { background: transparent; }
+    .autocomplete::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
     button {
       background: var(--accent);
@@ -240,6 +337,29 @@
       letter-spacing: 0.06em;
     }
 
+    .section-toggle {
+      background: transparent;
+      border: none;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .section-toggle:hover { background: transparent; }
+    .section-toggle:hover .results-label { color: var(--text-dim); }
+
+    .chevron {
+      display: inline-block;
+      font-size: 9px;
+      color: var(--text-muted);
+      transition: transform 0.15s;
+    }
+
+    .results-section.collapsed .chevron { transform: rotate(-90deg); }
+    .results-section.collapsed #resultsList { display: none; }
+
     .results-meta {
       font-size: 11px;
       color: var(--text-muted);
@@ -311,6 +431,7 @@
       word-break: break-all;
       max-height: 180px;
       overflow-y: auto;
+      overflow-x: hidden;
     }
 
     pre::-webkit-scrollbar { width: 4px; }
@@ -361,8 +482,7 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      max-height: 160px;
-      overflow-y: auto;
+      overflow: hidden;
     }
 
     .key-item {
@@ -390,6 +510,7 @@
       font-family: var(--font-mono);
       font-size: 11.5px;
       color: var(--text-dim);
+      word-break: break-all;
     }
 
     /* Footer */
@@ -438,6 +559,7 @@
       <div class="header-sub">Extract values from page JSON</div>
     </div>
     <div class="header-badge" id="jsonCount">scanning...</div>
+    <button class="icon-btn" id="pinBtn" title="Pin (keep open in a window)">📌</button>
   </div>
 
   <div class="main" id="main">
@@ -452,6 +574,7 @@
           autocomplete="off"
           spellcheck="false"
         />
+        <div class="autocomplete" id="autocomplete"></div>
       </div>
       <button id="searchBtn">Extract</button>
     </div>
@@ -473,7 +596,10 @@
 
     <div class="results-section" id="resultsSection">
       <div class="results-header">
-        <span class="results-label">Results</span>
+        <button class="section-toggle" id="resultsToggle">
+          <span class="chevron" id="resultsChevron">▾</span>
+          <span class="results-label">Results</span>
+        </button>
         <div class="results-actions">
           <span class="results-meta" id="resultsMeta"></span>
           <button class="copy-btn" id="copyAllBtn">Copy all (CSV)</button>

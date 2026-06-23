@@ -2,10 +2,56 @@
 
 let currentTab = null;
 let keysVisible = false;
+let allKeys = [];      // every key path found on the page (for autocomplete)
+let acItems = [];      // suggestions currently shown in the dropdown
+let acActive = -1;     // index of the highlighted suggestion
+
+// The side panel renders this same page with ?panel=1
+const urlParams = new URLSearchParams(location.search);
+const isPanel = urlParams.get('panel') === '1';
 
 async function getActiveTab() {
+  // In the side panel, target the active tab of the panel's own window
+  if (isPanel) {
+    try {
+      const win = await chrome.windows.getCurrent();
+      const [tab] = await chrome.tabs.query({ active: true, windowId: win.id });
+      if (tab) return tab;
+    } catch (_) {
+      // fall through to the generic query
+    }
+  }
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
+}
+
+// ─── Pin (side panel) ────────────────────────────────────────────────────────
+
+function updatePinButton() {
+  const btn = document.getElementById('pinBtn');
+  if (!btn) return;
+  btn.classList.toggle('active', isPanel);
+  btn.title = isPanel
+    ? 'Unpin (close the side panel)'
+    : 'Pin to this window (open in the side panel)';
+}
+
+async function onPinClick() {
+  // Already running inside the side panel → unpin by closing it
+  if (isPanel) {
+    window.close();
+    return;
+  }
+
+  // Dock the panel in the current window. sidePanel.open() must run inside the
+  // user gesture, so call it before anything else, then close the popup.
+  try {
+    const windowId = currentTab ? currentTab.windowId : undefined;
+    await chrome.sidePanel.open(windowId != null ? { windowId } : {});
+    window.close();
+  } catch (_) {
+    // Couldn't open the panel — leave the popup as-is
+  }
 }
 
 function setStatus(type, text) {
@@ -59,6 +105,7 @@ function renderResults(data, field) {
   const meta = document.getElementById('resultsMeta');
 
   section.classList.add('visible');
+  section.classList.remove('collapsed');
   list.innerHTML = '';
 
   const results = data.results;
@@ -178,6 +225,9 @@ async function doSearch(fieldValue) {
   const field = fieldValue.trim();
   if (!field) return;
 
+  // Give results room to breathe once the user actually searches
+  document.body.classList.add('searched');
+
   clearStatus();
   clearResults();
 
@@ -237,6 +287,7 @@ async function loadKeys() {
   }
 
   if (result && result.keys) {
+    allKeys = result.keys;
     renderKeys(result.keys);
 
     // Update badge
@@ -253,6 +304,87 @@ function keysToggleOff() {
   keysVisible = false;
 }
 
+// ─── Autocomplete ──────────────────────────────────────────────────────────
+
+// Rank a key against the query: exact leaf > leaf prefix > path prefix > contains
+function acScore(key, q) {
+  const lower = key.toLowerCase();
+  const leaf = lower.split('.').pop();
+  if (leaf === q) return 4;
+  if (leaf.startsWith(q)) return 3;
+  if (lower.startsWith(q)) return 2;
+  return 1;
+}
+
+// Wrap the matched part of the key in a highlight span (input is escaped)
+function highlightMatch(key, q) {
+  const idx = key.toLowerCase().indexOf(q);
+  if (idx === -1) return escapeHtml(key);
+  return escapeHtml(key.slice(0, idx))
+    + `<span class="ac-match">${escapeHtml(key.slice(idx, idx + q.length))}</span>`
+    + escapeHtml(key.slice(idx + q.length));
+}
+
+function hideAutocomplete() {
+  const box = document.getElementById('autocomplete');
+  box.classList.remove('visible');
+  box.innerHTML = '';
+  acItems = [];
+  acActive = -1;
+}
+
+function setAcActive(i) {
+  acActive = i;
+  const box = document.getElementById('autocomplete');
+  [...box.children].forEach((c, idx) => c.classList.toggle('active', idx === i));
+  const active = box.children[i];
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+function selectAutocomplete(key) {
+  document.getElementById('fieldInput').value = key;
+  hideAutocomplete();
+  doSearch(key);
+}
+
+function renderAutocomplete(query) {
+  const box = document.getElementById('autocomplete');
+  const q = query.trim().toLowerCase();
+  acActive = -1;
+
+  if (!q || allKeys.length === 0) {
+    hideAutocomplete();
+    return;
+  }
+
+  const matches = allKeys.filter(k => k.toLowerCase().includes(q));
+
+  // Nothing useful to suggest (no match, or the only match is exactly typed)
+  if (matches.length === 0 || (matches.length === 1 && matches[0].toLowerCase() === q)) {
+    hideAutocomplete();
+    return;
+  }
+
+  matches.sort((a, b) => acScore(b, q) - acScore(a, q) || a.length - b.length);
+  acItems = matches.slice(0, 8);
+
+  box.innerHTML = '';
+  acItems.forEach((key, i) => {
+    const item = document.createElement('div');
+    item.className = 'autocomplete-item';
+    item.innerHTML = `<div class="key-dot"></div><span>${highlightMatch(key, q)}</span>`;
+    // mousedown fires before the input loses focus, so the click isn't swallowed
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      selectAutocomplete(key);
+    });
+    item.addEventListener('mouseenter', () => setAcActive(i));
+    box.appendChild(item);
+  });
+
+  box.classList.add('visible');
+}
+
 function escapeHtml(text) {
   return String(text)
     .replace(/&/g, '&amp;')
@@ -263,12 +395,22 @@ function escapeHtml(text) {
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 
-document.addEventListener('DOMContentLoaded', async () => {
+// Resolve the active tab and refresh the key index / badge for it.
+// Re-run whenever the side panel needs to follow a new tab.
+async function scanTab() {
   currentTab = await getActiveTab();
 
-  // Update badge with JSON presence
   const badge = document.getElementById('jsonCount');
   badge.textContent = '...';
+  allKeys = [];
+  clearResults();
+  clearStatus();
+  keysToggleOff();
+
+  if (!currentTab) {
+    badge.textContent = 'no access';
+    return;
+  }
 
   try {
     await chrome.scripting.executeScript({
@@ -277,6 +419,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     const r = await chrome.tabs.sendMessage(currentTab.id, { action: 'getAllKeys' });
     if (r && r.keys && r.keys.length > 0) {
+      allKeys = r.keys;
       badge.textContent = `${r.keys.length} keys`;
     } else {
       badge.textContent = 'no JSON';
@@ -284,24 +427,61 @@ document.addEventListener('DOMContentLoaded', async () => {
   } catch (_) {
     badge.textContent = 'no access';
   }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  if (isPanel) document.body.classList.add('panel');
+  updatePinButton();
+  document.getElementById('pinBtn').addEventListener('click', onPinClick);
+
+  const fieldInput = document.getElementById('fieldInput');
 
   // Search button
   document.getElementById('searchBtn').addEventListener('click', () => {
-    const val = document.getElementById('fieldInput').value;
-    doSearch(val);
+    hideAutocomplete();
+    doSearch(fieldInput.value);
   });
 
-  // Enter key
-  document.getElementById('fieldInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      const val = document.getElementById('fieldInput').value;
-      doSearch(val);
+  // Live autocomplete as the user types / focuses
+  fieldInput.addEventListener('input', () => renderAutocomplete(fieldInput.value));
+  fieldInput.addEventListener('focus', () => renderAutocomplete(fieldInput.value));
+
+  // Keyboard: navigate the dropdown, select, or run the search
+  fieldInput.addEventListener('keydown', (e) => {
+    const open = document.getElementById('autocomplete').classList.contains('visible');
+
+    if (open && e.key === 'ArrowDown') {
+      e.preventDefault();
+      setAcActive((acActive + 1) % acItems.length);
+    } else if (open && e.key === 'ArrowUp') {
+      e.preventDefault();
+      setAcActive((acActive - 1 + acItems.length) % acItems.length);
+    } else if (e.key === 'Enter') {
+      if (open && acActive >= 0) {
+        e.preventDefault();
+        selectAutocomplete(acItems[acActive]);
+      } else {
+        hideAutocomplete();
+        doSearch(fieldInput.value);
+      }
+    } else if (e.key === 'Escape' && open) {
+      e.preventDefault();
+      hideAutocomplete();
     }
+  });
+
+  // Close the dropdown when clicking elsewhere
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.search-wrap')) hideAutocomplete();
+  });
+
+  // Collapse / expand the Results section
+  document.getElementById('resultsToggle').addEventListener('click', () => {
+    document.getElementById('resultsSection').classList.toggle('collapsed');
   });
 
   // Keys toggle
   document.getElementById('keysToggle').addEventListener('click', async () => {
-    const section = document.getElementById('keysSection');
     const btn = document.getElementById('keysToggle');
 
     if (keysVisible) {
@@ -312,4 +492,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       await loadKeys();
     }
   });
+
+  await scanTab();
+
+  // In the side panel, follow the active tab as the user switches or navigates
+  if (isPanel) {
+    const myWindowId = currentTab ? currentTab.windowId : null;
+    const refreshIfMine = (winId) => {
+      if (myWindowId == null || winId === myWindowId) scanTab();
+    };
+    chrome.tabs.onActivated.addListener((info) => refreshIfMine(info.windowId));
+    chrome.tabs.onUpdated.addListener((_tabId, change, tab) => {
+      if (change.status === 'complete' && tab.active) refreshIfMine(tab.windowId);
+    });
+  }
 });
