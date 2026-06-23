@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JSON Field Extractor</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface-2: #22263a;
+      --border: #2e3248;
+      --accent: #6c63ff;
+      --accent-dim: rgba(108, 99, 255, 0.15);
+      --accent-hover: #8b83ff;
+      --success: #3ecf8e;
+      --success-dim: rgba(62, 207, 142, 0.12);
+      --error: #ff5c5c;
+      --error-dim: rgba(255, 92, 92, 0.12);
+      --warn: #f59e0b;
+      --text: #e8eaf0;
+      --text-dim: #7c80a0;
+      --text-muted: #4a4f6a;
+      --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+      --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --radius: 8px;
+      --radius-sm: 5px;
+    }
+
+    body {
+      width: 420px;
+      min-height: 200px;
+      max-height: 600px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-ui);
+      font-size: 13px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .header-icon {
+      width: 28px;
+      height: 28px;
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    .header-title {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+
+    .header-sub {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 1px;
+    }
+
+    .header-badge {
+      margin-left: auto;
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      padding: 2px 7px;
+      border-radius: 20px;
+    }
+
+    /* Main content */
+    .main {
+      padding: 14px 16px;
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* Search row */
+    .search-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .search-wrap {
+      flex: 1;
+      position: relative;
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      font-size: 13px;
+      pointer-events: none;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      padding: 8px 10px 8px 32px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-dim);
+    }
+
+    input[type="text"]::placeholder {
+      color: var(--text-muted);
+      font-family: var(--font-ui);
+    }
+
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-sm);
+      padding: 8px 14px;
+      font-family: var(--font-ui);
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.08s;
+      white-space: nowrap;
+    }
+
+    button:hover { background: var(--accent-hover); }
+    button:active { transform: scale(0.97); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .btn-secondary {
+      background: var(--surface-2);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: var(--border);
+      color: var(--text);
+    }
+
+    /* Hint */
+    .hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .hint kbd {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 5px;
+      color: var(--text-dim);
+    }
+
+    /* Status bar */
+    .status {
+      display: none;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+    }
+
+    .status.error {
+      display: flex;
+      background: var(--error-dim);
+      border: 1px solid rgba(255,92,92,0.25);
+      color: var(--error);
+    }
+
+    .status.success {
+      display: flex;
+      background: var(--success-dim);
+      border: 1px solid rgba(62,207,142,0.2);
+      color: var(--success);
+    }
+
+    .status-icon { font-size: 14px; flex-shrink: 0; }
+
+    /* Results */
+    .results-section { display: none; }
+    .results-section.visible { display: block; }
+
+    .results-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .results-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .results-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .result-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+
+    .result-block:last-child { margin-bottom: 0; }
+
+    .result-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .result-type {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      padding: 1px 6px;
+      border-radius: 3px;
+    }
+
+    .copy-btn {
+      font-size: 10px;
+      padding: 3px 8px;
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+
+    .copy-btn:hover {
+      background: var(--accent-dim);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .copy-btn.copied {
+      color: var(--success);
+      border-color: var(--success);
+      background: var(--success-dim);
+    }
+
+    pre {
+      padding: 10px 12px;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      line-height: 1.6;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    pre::-webkit-scrollbar { width: 4px; }
+    pre::-webkit-scrollbar-track { background: transparent; }
+    pre::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    /* Suggestions */
+    .suggestions {
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .suggestions.visible { display: flex; }
+
+    .suggestions-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 2px;
+    }
+
+    .suggestion-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 4px 10px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: border-color 0.12s, color 0.12s;
+      width: fit-content;
+    }
+
+    .suggestion-chip:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* Keys panel */
+    .keys-section { display: none; }
+    .keys-section.visible { display: block; }
+
+    .keys-list {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      max-height: 160px;
+      overflow-y: auto;
+    }
+
+    .key-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 10px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .key-item:last-child { border-bottom: none; }
+    .key-item:hover { background: var(--surface-2); }
+
+    .key-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .key-text {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--text-dim);
+    }
+
+    /* Footer */
+    .footer {
+      padding: 10px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .keys-toggle-btn {
+      flex: 1;
+    }
+
+    /* Loading spinner */
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .spinner {
+      display: none;
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      flex-shrink: 0;
+    }
+
+    .spinner.visible { display: block; }
+
+    /* Scrollbar for main */
+    .main::-webkit-scrollbar { width: 4px; }
+    .main::-webkit-scrollbar-track { background: transparent; }
+    .main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="header-icon">⚡</div>
+    <div>
+      <div class="header-title">JSON Field Extractor</div>
+      <div class="header-sub">Extract values from page JSON</div>
+    </div>
+    <div class="header-badge" id="jsonCount">scanning...</div>
+  </div>
+
+  <div class="main" id="main">
+
+    <div class="search-row">
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input
+          type="text"
+          id="fieldInput"
+          placeholder="field name or body.request_id"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <button id="searchBtn">Extract</button>
+    </div>
+
+    <div class="hint">
+      Supports dot notation &nbsp;<kbd>body.request_id</kbd>&nbsp; and array index &nbsp;<kbd>errors[0]</kbd>
+    </div>
+
+    <div class="status" id="status">
+      <span class="status-icon" id="statusIcon"></span>
+      <span id="statusText"></span>
+      <div class="spinner" id="spinner"></div>
+    </div>
+
+    <div class="suggestions" id="suggestions">
+      <div class="suggestions-label">Did you mean:</div>
+      <div id="suggestionsList"></div>
+    </div>
+
+    <div class="results-section" id="resultsSection">
+      <div class="results-header">
+        <span class="results-label">Results</span>
+        <span class="results-meta" id="resultsMeta"></span>
+      </div>
+      <div id="resultsList"></div>
+    </div>
+
+    <div class="keys-section" id="keysSection">
+      <div class="results-header">
+        <span class="results-label">All available keys</span>
+        <span class="results-meta" id="keysMeta"></span>
+      </div>
+      <div class="keys-list" id="keysList"></div>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <button class="btn-secondary keys-toggle-btn" id="keysToggle">Show all keys</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
