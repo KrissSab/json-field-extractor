@@ -246,6 +246,12 @@
       font-family: var(--font-mono);
     }
 
+    .results-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .result-block {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -468,7 +474,10 @@
     <div class="results-section" id="resultsSection">
       <div class="results-header">
         <span class="results-label">Results</span>
-        <span class="results-meta" id="resultsMeta"></span>
+        <div class="results-actions">
+          <span class="results-meta" id="resultsMeta"></span>
+          <button class="copy-btn" id="copyAllBtn">Copy all (CSV)</button>
+        </div>
       </div>
       <div id="resultsList"></div>
     </div>

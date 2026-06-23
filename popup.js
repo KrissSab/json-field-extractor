@@ -32,6 +32,27 @@ function getValueType(val) {
   return typeof val;
 }
 
+// Escape a single CSV field per RFC 4180 (quote if it contains , " or newline)
+function csvEscape(value) {
+  const s = String(value);
+  if (/[",\n\r]/.test(s)) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+// One result per row. Objects/arrays are written as compact JSON on a single line.
+function resultsToCsv(results, field) {
+  const header = csvEscape(field || 'value');
+  const rows = results.map((res) => {
+    const cell = (res.value !== null && typeof res.value === 'object')
+      ? JSON.stringify(res.value)
+      : res.valueStr;
+    return csvEscape(cell);
+  });
+  return [header, ...rows].join('\n');
+}
+
 function renderResults(data, field) {
   const section = document.getElementById('resultsSection');
   const list = document.getElementById('resultsList');
@@ -45,6 +66,22 @@ function renderResults(data, field) {
     ? `1 match in ${data.totalBlocks} block(s)`
     : `${results.length} matches in ${data.totalBlocks} block(s)`;
   meta.textContent = label;
+
+  // "Copy all" exports every match as CSV (header = field name, one value per row)
+  const copyAllBtn = document.getElementById('copyAllBtn');
+  copyAllBtn.style.display = results.length > 1 ? '' : 'none';
+  copyAllBtn.textContent = 'Copy all (CSV)';
+  copyAllBtn.classList.remove('copied');
+  copyAllBtn.onclick = function () {
+    navigator.clipboard.writeText(resultsToCsv(results, field)).then(() => {
+      this.textContent = 'Copied!';
+      this.classList.add('copied');
+      setTimeout(() => {
+        this.textContent = 'Copy all (CSV)';
+        this.classList.remove('copied');
+      }, 1500);
+    });
+  };
 
   for (const res of results) {
     const block = document.createElement('div');
