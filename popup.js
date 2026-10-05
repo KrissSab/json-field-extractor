@@ -112,7 +112,9 @@ function renderResults(data, field) {
   const label = results.length === 1
     ? `1 match in ${data.totalBlocks} block(s)`
     : `${results.length} matches in ${data.totalBlocks} block(s)`;
-  meta.textContent = label;
+  meta.textContent = data.partial
+    ? `${label} · recovered from truncated JSON`
+    : label;
 
   // "Copy all" exports every match as CSV (header = field name, one value per row)
   const copyAllBtn = document.getElementById('copyAllBtn');

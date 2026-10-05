@@ -7,56 +7,162 @@ function extractPageText() {
   return document.body.innerText || document.body.textContent || '';
 }
 
-/**
- * Find all JSON-like objects from a text string
- */
-function findAllJsonBlocks(text) {
-  const jsonBlocks = [];
-  
-  // Try the entire text as JSON first (e.g. pure JSON pages)
-  const trimmed = text.trim();
-  try {
-    const parsed = JSON.parse(trimmed);
-    jsonBlocks.push(parsed);
-    return jsonBlocks;
-  } catch (_) {}
+// Characters that may legally appear OUTSIDE a string in JSON. Anything else
+// (a bare letter from "info", a "@", etc.) marks where the JSON has ended and
+// unrelated page text — e.g. row metadata between log records — has begun.
+const JSON_OUTSIDE_STRING = new Set([
+  '{', '}', '[', ']', ',', ':', '"', '-', '+', '.', 'e', 'E',
+  't', 'r', 'u', 'f', 'a', 'l', 's', 'n',            // true / false / null
+  ' ', '\n', '\t', '\r', '\f', '\v'
+]);
 
-  // Find JSON blocks using bracket matching
-  const openChars = ['{', '['];
-  
-  for (let i = 0; i < text.length; i++) {
-    if (openChars.includes(text[i])) {
-      let depth = 0;
-      let inString = false;
-      let escape = false;
-      let j = i;
-      
-      for (; j < text.length; j++) {
-        const ch = text[j];
-        
-        if (escape) { escape = false; continue; }
-        if (ch === '\\' && inString) { escape = true; continue; }
-        if (ch === '"') { inString = !inString; continue; }
-        if (inString) continue;
-        
-        if (ch === '{' || ch === '[') depth++;
-        else if (ch === '}' || ch === ']') {
-          depth--;
-          if (depth === 0) {
-            const candidate = text.slice(i, j + 1);
-            try {
-              const parsed = JSON.parse(candidate);
-              if (typeof parsed === 'object' && parsed !== null) {
-                jsonBlocks.push(parsed);
-              }
-            } catch (_) {}
-            break;
+/**
+ * Best-effort repair of a JSON string that was cut off (truncated logs).
+ *
+ * Walks the text tracking string state and open brackets, remembering the last
+ * position where the structure was "between members" — right after a complete
+ * value, a comma, or an opening/closing bracket. It stops at the first char that
+ * can't belong to JSON (trailing page text), then rewinds to that safe point
+ * (dropping any partial trailing token like an unfinished number or string) and
+ * closes every still-open bracket, so everything before the cut is recovered.
+ * Returns a parseable JSON string, or null if nothing complete was found.
+ */
+function repairTruncatedJson(str) {
+  const stack = [];        // open brackets awaiting a close, e.g. ['}', ']']
+  let inString = false;
+  let escape = false;
+  let safeLen = 0;         // length of the prefix that is safe to close off
+  let safeStack = [];      // snapshot of `stack` at that safe point
+
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === '\\') escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch === '"') { inString = true; continue; }
+
+    if (ch === '{' || ch === '[') {
+      stack.push(ch === '{' ? '}' : ']');
+      safeLen = i + 1; safeStack = stack.slice();   // empty container is closable
+    } else if (ch === '}' || ch === ']') {
+      stack.pop();
+      safeLen = i + 1; safeStack = stack.slice();    // container just completed
+    } else if (ch === ',') {
+      safeLen = i; safeStack = stack.slice();         // member before comma is complete
+    } else if (ch >= '0' && ch <= '9') {
+      // digit — part of a number, keep scanning
+    } else if (!JSON_OUTSIDE_STRING.has(ch)) {
+      break;                                          // trailing non-JSON text → stop
+    }
+  }
+
+  if (safeLen === 0 || safeStack.length === 0) return null;
+
+  let out = str.slice(0, safeLen).replace(/,\s*$/, '');
+  for (let i = safeStack.length - 1; i >= 0; i--) out += safeStack[i];
+  return out;
+}
+
+/**
+ * Parse one candidate segment that starts with '{' or '['. Returns
+ * { obj, partial } or null. First tries to read a complete object (ignoring any
+ * trailing text after it); if the segment is cut off, falls back to repair.
+ */
+function parseSegment(seg) {
+  let depth = 0, inString = false, escape = false;
+
+  for (let j = 0; j < seg.length; j++) {
+    const ch = seg[j];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+
+    if (ch === '{' || ch === '[') depth++;
+    else if (ch === '}' || ch === ']') {
+      depth--;
+      if (depth === 0) {
+        try {
+          const parsed = JSON.parse(seg.slice(0, j + 1));
+          if (typeof parsed === 'object' && parsed !== null) {
+            return { obj: parsed, partial: false };
           }
-        }
+        } catch (_) {}
+        break;   // balanced but not valid JSON → try repair below
       }
     }
   }
-  
+
+  const repaired = repairTruncatedJson(seg);
+  if (repaired) {
+    try {
+      const parsed = JSON.parse(repaired);
+      if (typeof parsed === 'object' && parsed !== null) {
+        return { obj: parsed, partial: true };
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+/**
+ * Find all JSON-like objects from a text string.
+ *
+ * Pages like log viewers concatenate many JSON records (one per row), each of
+ * which may be truncated in the display. We split the text at record boundaries
+ * — every top-level '{' / '[' that isn't a nested value — and parse/repair each
+ * record independently, so one truncated record can't swallow the rest.
+ *
+ * Returns [{ obj, partial }] — `partial` is true when the record was recovered
+ * from truncated JSON and may be missing fields after the cut-off point.
+ */
+function findAllJsonBlocks(text) {
+  const jsonBlocks = [];
+
+  // Try the entire text as JSON first (e.g. pure JSON pages / API responses)
+  const trimmed = text.trim();
+  try {
+    const parsed = JSON.parse(trimmed);
+    jsonBlocks.push({ obj: parsed, partial: false });
+    return jsonBlocks;
+  } catch (_) {}
+
+  // Locate the start of each top-level record. A '{' or '[' begins a new record
+  // unless it directly follows ':' ',' '[' (i.e. it's a nested value/element).
+  const starts = [];
+  let inString = false, escape = false, prev = '';
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === '\\') escape = true;
+      else if (ch === '"') { inString = false; prev = '"'; }
+      continue;
+    }
+
+    if (ch === '"') { inString = true; continue; }          // keep prev until close
+    if (ch === ' ' || ch === '\n' || ch === '\t' ||
+        ch === '\r' || ch === '\f' || ch === '\v') continue; // whitespace: prev unchanged
+
+    if (ch === '{' || ch === '[') {
+      if (!(prev === ':' || prev === ',' || prev === '[')) starts.push(i);
+    }
+    prev = ch;
+  }
+
+  for (let k = 0; k < starts.length; k++) {
+    const end = k + 1 < starts.length ? starts[k + 1] : text.length;
+    const block = parseSegment(text.slice(starts[k], end));
+    if (block) jsonBlocks.push(block);
+  }
+
   return jsonBlocks;
 }
 
@@ -101,45 +207,46 @@ function searchField(fieldPath) {
   }
   
   const results = [];
-  
+
   for (let i = 0; i < jsonBlocks.length; i++) {
     const block = jsonBlocks[i];
-    const value = getFieldValue(block, fieldPath);
-    
+    const value = getFieldValue(block.obj, fieldPath);
+
     if (value !== undefined) {
       results.push({
         blockIndex: i,
         value: value,
-        valueStr: typeof value === 'object' 
-          ? JSON.stringify(value, null, 2) 
+        valueStr: typeof value === 'object'
+          ? JSON.stringify(value, null, 2)
           : String(value)
       });
     }
   }
-  
+
   if (results.length === 0) {
     // Try to find partial matches (fuzzy search)
     const suggestions = [];
     for (const block of jsonBlocks) {
-      collectKeys(block, '', suggestions);
+      collectKeys(block.obj, '', suggestions);
     }
     const uniqueSuggestions = [...new Set(suggestions)];
-    const matches = uniqueSuggestions.filter(k => 
+    const matches = uniqueSuggestions.filter(k =>
       k.toLowerCase().includes(fieldPath.toLowerCase())
     ).slice(0, 5);
-    
-    return { 
-      success: false, 
+
+    return {
+      success: false,
       error: `Field "${fieldPath}" not found`,
       suggestions: matches,
       totalBlocks: jsonBlocks.length
     };
   }
-  
-  return { 
-    success: true, 
+
+  return {
+    success: true,
     results,
-    totalBlocks: jsonBlocks.length
+    totalBlocks: jsonBlocks.length,
+    partial: jsonBlocks.some(b => b.partial)
   };
 }
 
@@ -167,9 +274,9 @@ function getAllKeys() {
   
   const keys = [];
   for (const block of jsonBlocks) {
-    collectKeys(block, '', keys);
+    collectKeys(block.obj, '', keys);
   }
-  
+
   return [...new Set(keys)].sort();
 }
 
